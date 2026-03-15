@@ -1,0 +1,19 @@
+version: '3'
+
+env:
+  PROJECT_NAME: 'github.com/yogenyslav/errs'
+
+tasks:
+  tidy:
+    cmd: 'go mod tidy'
+
+  lint:
+    cmd: 'golangci-lint run'
+
+  test:
+    silent: true
+    cmds:
+      - echo "running tests"
+      - go test $PROJECT_NAME/... -coverprofile=coverage.out --race
+      - go tool cover -func=coverage.out | grep total
+      - rm -f coverage.out
