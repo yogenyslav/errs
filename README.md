@@ -1,54 +1,128 @@
 # errs
 
-The easy way to handle errors.
+`errs` helps you wrap errors with source location, readable context, and optional metadata.
 
-## Example usage
+## Requirements
+
+- Go `1.26+`
+
+## Install
+
+```bash
+go get github.com/yogenyslav/errs
+```
+
+## Quick start
 
 ```go
-var (
-    ErrInvalidParams = errors.New("tried to fetch data with invalid params")
-    ErrFetchData     = errors.New("unable to fetch data")
+package main
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/yogenyslav/errs"
 )
 
-func foo() (any, error) {
-    // some logic
-    resp, err := fetchData()
-    if resp.StatuCode >= 400 && resp.StatusCode < 500 {
-        return nil, errs.Wrap(err, ErrInvalidParams)
-    } else if resp.StatusCode >= 500 {
-        return nil, errs.Wrap(err, ErrFetchData)
-    }
-    return resp, errs.Wrap(err, "fetch data") // if err == nil than errs.Wrap() would also be nil
+func fetchData() error {
+	return errors.New("connection reset by peer")
 }
 
-func bar() {
-    // ...
+func load() error {
+	err := fetchData()
+	return errs.Wrap(err, "fetch data", map[string]any{
+		"service": "billing",
+		"attempt": 2,
+	})
+}
 
-    err := foo()
-    if errors.Is(err, ErrInvalidParams) {
-        // err with description "tried to fetch data with invalid params"
-    } else if errors.Is(err, ErrFetchData) {
-        // err with description "unable to fetch data"
-    } else if err != nil {
-        // err with description "fetch data"
-        // e.g. "/path/to/the/project/main.go:50 fetch data -> connection reset by peer"
-    }
+func main() {
+	if err := load(); err != nil {
+		fmt.Println(err) // fetch data
 
-    // ...
+		we, ok := errors.AsType[*errs.WrappedErr](err)
+		if ok {
+			if v, found := we.GetAttr("service"); found {
+				fmt.Println("service:", v)
+			}
+		}
+	}
 }
 ```
 
-It is possible to turn on trimming the source file prefix up to the level of project root directory.
+## API
+
+### `Wrap(e error, desc string, meta ...map[string]any) error`
+
+Wraps an error with:
+
+- source location (`file:line`),
+- a human-readable message (`desc`),
+- optional metadata (`meta`).
+
+Behavior:
+
+- returns `nil` when `e == nil`,
+- appends context if `e` is already `*WrappedErr`,
+- merges metadata into the existing wrapped error chain.
+
+### `WrapChain`
+
+Use `WrapChain(we *WrappedErr, e error, desc string, meta ...map[string]any) *WrappedErr`
+when you need to append a **new plain error** to an existing wrapped chain.
+
+Behavior:
+
+- if `we == nil`, it starts a new wrapped chain (same as `Wrap`),
+- if `we != nil`, it adds the new plain error to `internalErr`,
+- it prepends the new description to `msg`,
+- it merges metadata into the chain.
 
 ```go
-func main() {
-    enableTrim := true
-    errs.WithTrimSourcePref(enableTrim)
+base := errs.Wrap(errors.New("dial tcp timeout"), "fetch profile").(*errs.WrappedErr)
 
-    // project root: /your/path/to/project
+// Add a new plain error into the same wrapped chain.
+next := errs.WrapChain(base, errors.New("retry failed"), "refresh cache", map[string]any{
+	"attempt": 2,
+})
 
-    // errs.Wrap(err, "err description")
-    // before: "/your/path/to/project/internal/abc.go:10 err description -> wrapped err"
-    // after: "internal/abc.go:10 err description -> wrapped err"
+fmt.Println(next.Error())
+// refresh cache: fetch profile
+```
+
+### `WrappedError` (`WrappedErr`)
+
+`WrappedErr` is the public wrapped error structure used by `Wrap` (referred to as wrapped error in this README).
+
+- `Error() string` returns only the human-readable message,
+- `GetAttr(key string) (any, bool)` reads metadata values by key.
+
+Use `errors.AsType[*errs.WrappedErr]` (Go 1.26+) to access wrapped metadata:
+
+```go
+we, ok := errors.AsType[*errs.WrappedErr](err)
+if ok {
+	v, found := we.GetAttr("request_id")
+	_ = v
+	_ = found
 }
 ```
+
+## Source path trimming
+
+By default, source location uses absolute paths. You can trim the project root prefix:
+
+```go
+errs.WithTrimSourcePref(true)
+```
+
+Example:
+
+- before: `/your/path/to/project/internal/abc.go:10`
+- after: `internal/abc.go:10`
+
+## Notes
+
+- The package captures call-site location via `runtime.Caller(1)`.
+- Trimming is controlled globally with `WithTrimSourcePref`.
+
