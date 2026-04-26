@@ -14,10 +14,12 @@ func ExampleWrap() {
 }
 
 func ExampleWrappedErr_GetAttr() {
-	err := errs.Wrap(errors.New("timeout"), "fetch user", map[string]any{
-		"service": "billing",
-		"attempt": 2,
-	})
+	err := errs.Wrap(
+		errors.New("timeout"), "fetch user", map[string]any{
+			"service": "billing",
+			"attempt": 2,
+		},
+	)
 
 	we, ok := errors.AsType[*errs.WrappedErr](err)
 	fmt.Println(ok)
@@ -35,13 +37,17 @@ func ExampleWrappedErr_GetAttr() {
 }
 
 func ExampleWrapChain() {
-	base := errs.Wrap(errors.New("dial tcp timeout"), "fetch profile", map[string]any{
-		"service": "profiles",
-	}).(*errs.WrappedErr)
+	base := errs.Wrap(
+		errors.New("dial tcp timeout"), "fetch profile", map[string]any{
+			"service": "profiles",
+		},
+	).(*errs.WrappedErr)
 
-	next := errs.WrapChain(base, errors.New("retry failed"), "refresh cache", map[string]any{
-		"attempt": 2,
-	})
+	next := errs.WrapChain(
+		base, errors.New("retry failed"), "refresh cache", map[string]any{
+			"attempt": 2,
+		},
+	)
 
 	fmt.Println(next.Error())
 
@@ -64,4 +70,3 @@ func ExampleWithTrimSourcePref() {
 	// If source trimming is enabled, internal source locations look like:
 	// internal/file.go:42
 }
-
