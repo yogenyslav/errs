@@ -36,27 +36,30 @@ func ExampleWrappedErr_GetAttr() {
 	// false
 }
 
-func ExampleWrapChain() {
+func ExampleWrappedErr_Wrap() {
 	base := errs.Wrap(
 		errors.New("dial tcp timeout"), "fetch profile", map[string]any{
 			"service": "profiles",
 		},
 	).(*errs.WrappedErr)
 
-	next := errs.WrapChain(
-		base, errors.New("retry failed"), "refresh cache", map[string]any{
+	next := base.Wrap(
+		errors.New("retry failed"), "refresh cache", map[string]any{
 			"attempt": 2,
 		},
 	)
 
 	fmt.Println(next.Error())
 
-	service, _ := next.GetAttr("service")
-	attempt, _ := next.GetAttr("attempt")
+	chain, ok := errors.AsType[*errs.WrappedErr](next)
+	fmt.Println(ok)
+	service, _ := chain.GetAttr("service")
+	attempt, _ := chain.GetAttr("attempt")
 	fmt.Println(service, attempt)
 
 	// Output:
 	// refresh cache: fetch profile
+	// true
 	// profiles 2
 }
 

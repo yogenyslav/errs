@@ -29,15 +29,35 @@ func (e *WrappedErr) GetAttr(key string) (any, bool) {
 	return v, ok
 }
 
-func (e *WrappedErr) wrapInChain(err error, src source, desc string, meta map[string]any) {
+// Wrap fits the message into the error chain, reports source file with human-readable description
+func (e *WrappedErr) Wrap(err error, desc string, meta ...map[string]any) error {
+	if e == nil {
+		return Wrap(err, desc, meta...)
+	}
+
+	var m map[string]any
+	if len(meta) > 0 {
+		m = meta[0]
+	}
+
+	src := getSource(wrapCallerSkip)
+	e.wrap(err, src, desc, m)
+	return e
+}
+
+func (e *WrappedErr) wrap(err error, src source, desc string, meta map[string]any) {
 	if e.meta == nil {
 		e.meta = make(map[string]any)
 	}
 	maps.Insert(e.meta, maps.All(meta))
+
 	if desc != "" {
 		e.msg = fmt.Sprintf("%s: %s", desc, e.msg)
 	}
+
 	if err != nil {
 		e.internalErr = fmt.Errorf("%s %w -> %w", src, err, e.internalErr)
+	} else {
+		e.internalErr = fmt.Errorf("%s wraps -> %w", src, e.internalErr)
 	}
 }

@@ -1,12 +1,17 @@
 # errs
 
-`errs` helps you wrap errors with source location, readable context, and optional metadata.
+`errs` is a Go 1.26+ package for building structured error chains with:
+
+- source location for the call site,
+- a readable message chain for logs and user-facing output,
+- optional key-value metadata,
+- a public `WrappedErr` structure for inspection and chaining.
 
 ## Requirements
 
 - Go `1.26+`
 
-## Install
+## Installation
 
 ```bash
 go get github.com/yogenyslav/errs
@@ -28,17 +33,14 @@ func fetchData() error {
 	return errors.New("connection reset by peer")
 }
 
-func load() error {
-	err := fetchData()
-	return errs.Wrap(err, "fetch data", map[string]any{
+func main() {
+	err := errs.Wrap(fetchData(), "fetch data", map[string]any{
 		"service": "billing",
 		"attempt": 2,
 	})
-}
 
-func main() {
-	if err := load(); err != nil {
-		fmt.Println(err) // fetch data
+	if err != nil {
+		fmt.Println(err.Error())
 
 		we, ok := errors.AsType[*errs.WrappedErr](err)
 		if ok {
@@ -50,39 +52,50 @@ func main() {
 }
 ```
 
-## API
+## How wrapping works
+
+`WrappedErr` keeps two separate pieces of state:
+
+- `msg` — the human-readable description chain returned by `Error()`,
+- `internalErr` — the wrapped internal error chain.
+
+When you call `(*WrappedErr).Wrap(err, desc, meta...)`:
+
+- the new description is prepended to `msg`,
+- the new plain error is accumulated into `internalErr`,
+- metadata is merged into the existing map,
+- the source location of the call is attached automatically.
+
+When you call the package-level `Wrap(err, desc, meta...)` with a plain error, it creates a new `WrappedErr`. When you call it with an existing `*WrappedErr`, it extends the current message chain and keeps the wrapped chain intact.
+
+## API reference
 
 ### `Wrap(e error, desc string, meta ...map[string]any) error`
 
-Wraps an error with:
-
-- source location (`file:line`),
-- a human-readable message (`desc`),
-- optional metadata (`meta`).
+Creates a wrapped error from a plain error, or extends an existing wrapped error.
 
 Behavior:
 
 - returns `nil` when `e == nil`,
-- appends context if `e` is already `*WrappedErr`,
-- merges metadata into the existing wrapped error chain.
+- wraps plain errors with source location and description,
+- extends an existing `*WrappedErr` by prepending the new description,
+- preserves and merges metadata.
 
-### `WrapChain`
+### `(*WrappedErr).Wrap(err error, desc string, meta ...map[string]any) error`
 
-Use `WrapChain(we *WrappedErr, e error, desc string, meta ...map[string]any) *WrappedErr`
-when you need to append a **new plain error** to an existing wrapped chain.
+Adds a new plain error into an existing wrapped chain.
 
 Behavior:
 
-- if `we == nil`, it starts a new wrapped chain (same as `Wrap`),
-- if `we != nil`, it adds the new plain error to `internalErr`,
-- it prepends the new description to `msg`,
-- it merges metadata into the chain.
+- if the receiver is `nil`, it falls back to `Wrap(err, desc, meta...)`,
+- prepends `desc` to the visible message chain,
+- appends the new plain error to the internal error chain,
+- merges metadata into the chain.
 
 ```go
 base := errs.Wrap(errors.New("dial tcp timeout"), "fetch profile").(*errs.WrappedErr)
 
-// Add a new plain error into the same wrapped chain.
-next := errs.WrapChain(base, errors.New("retry failed"), "refresh cache", map[string]any{
+next := base.Wrap(errors.New("retry failed"), "refresh cache", map[string]any{
 	"attempt": 2,
 })
 
@@ -90,14 +103,14 @@ fmt.Println(next.Error())
 // refresh cache: fetch profile
 ```
 
-### `WrappedError` (`WrappedErr`)
+### `WrappedErr`
 
-`WrappedErr` is the public wrapped error structure used by `Wrap` (referred to as wrapped error in this README).
+`WrappedErr` is the public structure returned by the package.
 
-- `Error() string` returns only the human-readable message,
+- `Error() string` returns the readable message chain,
 - `GetAttr(key string) (any, bool)` reads metadata values by key.
 
-Use `errors.AsType[*errs.WrappedErr]` (Go 1.26+) to access wrapped metadata:
+Use `errors.AsType[*errs.WrappedErr]` to inspect wrapped values:
 
 ```go
 we, ok := errors.AsType[*errs.WrappedErr](err)
@@ -108,9 +121,9 @@ if ok {
 }
 ```
 
-## Source path trimming
+## Source trimming
 
-By default, source location uses absolute paths. You can trim the project root prefix:
+By default, source location uses the full path. If you want shorter paths in wrapped errors, enable prefix trimming:
 
 ```go
 errs.WithTrimSourcePref(true)
@@ -123,6 +136,6 @@ Example:
 
 ## Notes
 
-- The package captures call-site location via `runtime.Caller(1)`.
-- Trimming is controlled globally with `WithTrimSourcePref`.
+- The package captures call-site information via `runtime.Caller(2)`.
+- Source trimming is controlled globally with `WithTrimSourcePref`.
 

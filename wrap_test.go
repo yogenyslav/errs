@@ -2,186 +2,227 @@ package errs
 
 import (
 	"errors"
-	"fmt"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+type wrappedSnapshot struct {
+	msg      string
+	meta     map[string]any
+	internal string
+}
+
+func assertWrappedErr(t *testing.T, err error, want wrappedSnapshot) {
+	t.Helper()
+
+	got, ok := errors.AsType[*WrappedErr](err)
+	require.True(t, ok, "expected error to be of type *WrappedErr")
+
+	assert.Equal(t, want, wrappedSnapshot{
+		msg:      got.msg,
+		meta:     got.meta,
+		internal: normalizeInternalErr(got.internalErr),
+	})
+}
+
+func normalizeInternalErr(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	segments := strings.Split(err.Error(), " -> ")
+	for i, segment := range segments {
+		segments[i] = removeSourcePrefix(segment)
+	}
+
+	return strings.Join(segments, " -> ")
+}
+
+func removeSourcePrefix(text string) string {
+	parts := strings.SplitN(text, " ", 2)
+	if len(parts) < 2 || !strings.Contains(parts[0], ":") {
+		return text
+	}
+
+	return parts[1]
+}
+
 func TestWrap(t *testing.T) {
 	WithTrimSourcePref(true)
-	defer WithTrimSourcePref(false)
-
-	errPlain := errors.New("plain error")
-	errWrapped := Wrap(errPlain, "wrapped error").(*WrappedErr)
+	t.Cleanup(func() { WithTrimSourcePref(false) })
 
 	sampleMeta := map[string]any{
 		"key1": "value1",
 		"key2": 42,
 	}
-	errWrappedWithMeta := Wrap(errPlain, "wrapped error with meta", sampleMeta).(*WrappedErr)
 
 	tests := []struct {
 		name string
-		err  error
+		in   func() error
 		desc string
 		meta []map[string]any
-		want *WrappedErr
+		want *wrappedSnapshot
 	}{
 		{
 			name: "wrap plain error with description",
-			err:  errPlain,
+			in:   func() error { return errors.New("plain error") },
 			desc: "wrapped error",
-			want: &WrappedErr{
-				internalErr: errPlain,
-				msg:         "wrapped error",
-			},
+			want: &wrappedSnapshot{msg: "wrapped error", internal: "plain error"},
 		},
 		{
 			name: "wrap plain error without description",
-			err:  errPlain,
+			in:   func() error { return errors.New("plain error") },
 			desc: "",
-			want: &WrappedErr{
-				internalErr: errPlain,
-				msg:         "",
-			},
+			want: &wrappedSnapshot{msg: "", internal: "plain error"},
 		},
 		{
 			name: "wrap plain error with meta and description",
-			err:  errPlain,
+			in:   func() error { return errors.New("plain error") },
 			desc: "wrapped error with meta",
 			meta: []map[string]any{sampleMeta},
-			want: &WrappedErr{
-				internalErr: errPlain,
-				msg:         "wrapped error with meta",
-				meta:        sampleMeta,
-			},
+			want: &wrappedSnapshot{msg: "wrapped error with meta", meta: sampleMeta, internal: "plain error"},
 		},
 		{
 			name: "wrap already wrapped error with description",
-			err:  new(*errWrapped),
+			in: func() error {
+				return Wrap(errors.New("plain error"), "wrapped error")
+			},
 			desc: "wrapped again",
-			want: &WrappedErr{
-				internalErr: errWrapped.internalErr,
-				msg:         "wrapped again: " + errWrapped.msg,
-				meta:        make(map[string]any),
+			want: &wrappedSnapshot{
+				msg:      "wrapped again: wrapped error",
+				meta:     map[string]any{},
+				internal: "wraps -> plain error",
 			},
 		},
 		{
 			name: "wrap already wrapped error without description",
-			err:  new(*errWrapped),
+			in: func() error {
+				return Wrap(errors.New("plain error"), "wrapped error")
+			},
 			desc: "",
-			want: &WrappedErr{
-				internalErr: errWrapped.internalErr,
-				msg:         errWrapped.msg,
-				meta:        make(map[string]any),
+			want: &wrappedSnapshot{
+				msg:      "wrapped error",
+				meta:     map[string]any{},
+				internal: "wraps -> plain error",
 			},
 		},
 		{
 			name: "wrap already wrapped error with meta and description",
-			err:  new(*errWrappedWithMeta),
-			desc: "wrapped again with meta",
-			meta: []map[string]any{
-				{"new_key": "new_value"},
+			in: func() error {
+				return Wrap(errors.New("plain error"), "wrapped error with meta", sampleMeta)
 			},
-			want: &WrappedErr{
-				internalErr: errWrappedWithMeta.internalErr,
-				msg:         "wrapped again with meta: " + errWrappedWithMeta.msg,
+			desc: "wrapped again with meta",
+			meta: []map[string]any{{"new_key": "new_value"}},
+			want: &wrappedSnapshot{
+				msg: "wrapped again with meta: wrapped error with meta",
 				meta: func() map[string]any {
-					mergedMeta := make(map[string]any)
-					maps.Copy(mergedMeta, sampleMeta)
+					mergedMeta := maps.Clone(sampleMeta)
 					mergedMeta["new_key"] = "new_value"
 					return mergedMeta
 				}(),
+				internal: "wraps -> plain error",
 			},
 		},
 		{
 			name: "wrap nil error",
-			err:  nil,
+			in:   func() error { return nil },
 			desc: "should return nil",
 			want: nil,
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(
-			tt.name, func(t *testing.T) {
-				var err error
+		t.Run(tt.name, func(t *testing.T) {
+			got := Wrap(tt.in(), tt.desc, tt.meta...)
+			if tt.want == nil {
+				require.Nil(t, got)
+				return
+			}
 
-				wrappedCopy, ok := errors.AsType[*WrappedErr](tt.err)
-				if ok {
-					err = wrappedCopy
-				} else {
-					err = tt.err
-				}
-
-				e := Wrap(err, tt.desc, tt.meta...)
-				if e == nil {
-					assert.Nil(t, tt.want)
-					return
-				}
-
-				we, ok := errors.AsType[*WrappedErr](e)
-				require.True(t, ok, "expected error to be of type *WrappedErr")
-
-				assert.Equal(t, tt.want.Error(), we.Error())
-				assert.Equal(t, tt.want.meta, we.meta)
-				internalErrsEqual(t, tt.want.internalErr, we.internalErr)
-			},
-		)
+			assertWrappedErr(t, got, *tt.want)
+		})
 	}
 }
 
-func TestWrapChain(t *testing.T) {
+func TestWrappedErr_Wrap(t *testing.T) {
 	WithTrimSourcePref(true)
-	defer WithTrimSourcePref(false)
+	t.Cleanup(func() { WithTrimSourcePref(false) })
 
-	plainErr := errors.New("plain error")
-	wrappedErr := Wrap(plainErr, "wrapped error").(*WrappedErr)
+	sampleMeta := map[string]any{
+		"key1": "value1",
+		"key2": 42,
+	}
 
 	tests := []struct {
 		name string
-		we   *WrappedErr
-		err  error
+		we   func() *WrappedErr
+		err  func() error
 		desc string
 		meta []map[string]any
-		want *WrappedErr
+		want *wrappedSnapshot
 	}{
 		{
-			name: "wrap chain with nil WrappedErr",
-			we:   nil,
-			err:  plainErr,
-			desc: "wrapped error",
-			want: &WrappedErr{
-				internalErr: plainErr,
-				msg:         "wrapped error",
+			name: "nil receiver falls back to package Wrap",
+			we:   func() *WrappedErr { return nil },
+			err:  func() error { return errors.New("plain error") },
+			desc: "wrapped via method",
+			want: &wrappedSnapshot{msg: "wrapped via method", internal: "plain error"},
+		},
+		{
+			name: "wrap plain error into existing wrapped chain",
+			we: func() *WrappedErr {
+				return Wrap(errors.New("plain error"), "wrapped error").(*WrappedErr)
+			},
+			err:  func() error { return errors.New("retry failed") },
+			desc: "wrapped again",
+			meta: []map[string]any{{"new_key": "new_value"}},
+			want: &wrappedSnapshot{
+				msg:      "wrapped again: wrapped error",
+				meta:     map[string]any{"new_key": "new_value"},
+				internal: "retry failed -> plain error",
 			},
 		},
 		{
-			name: "wrap chain with existing WrappedErr",
-			we:   wrappedErr,
-			err:  plainErr,
-			desc: "wrapped again",
+			name: "wrap plain error into existing wrapped chain without description",
+			we: func() *WrappedErr {
+				return Wrap(errors.New("plain error"), "wrapped error").(*WrappedErr)
+			},
+			err:  func() error { return errors.New("retry failed") },
+			desc: "",
+			want: &wrappedSnapshot{
+				msg:      "wrapped error",
+				meta:     map[string]any{},
+				internal: "retry failed -> plain error",
+			},
+		},
+		{
+			name: "wrap plain error into wrapped chain with existing metadata",
+			we: func() *WrappedErr {
+				return Wrap(errors.New("plain error"), "wrapped error with meta", sampleMeta).(*WrappedErr)
+			},
+			err:  func() error { return errors.New("retry failed") },
+			desc: "wrapped again with meta",
 			meta: []map[string]any{{"new_key": "new_value"}},
-			want: &WrappedErr{
-				internalErr: fmt.Errorf("%w -> %w", plainErr, wrappedErr.internalErr),
-				msg:         "wrapped again: " + wrappedErr.msg,
-				meta:        map[string]any{"new_key": "new_value"},
+			want: &wrappedSnapshot{
+				msg: "wrapped again with meta: wrapped error with meta",
+				meta: func() map[string]any {
+					mergedMeta := maps.Clone(sampleMeta)
+					mergedMeta["new_key"] = "new_value"
+					return mergedMeta
+				}(),
+				internal: "retry failed -> plain error",
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(
-			tt.name, func(t *testing.T) {
-				we := WrapChain(tt.we, tt.err, tt.desc, tt.meta...)
-
-				assert.Equal(t, tt.want.Error(), we.Error())
-				assert.Equal(t, tt.want.meta, we.meta)
-				internalErrsEqual(t, tt.want.internalErr, we.internalErr)
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.we().Wrap(tt.err(), tt.desc, tt.meta...)
+			assertWrappedErr(t, got, *tt.want)
+		})
 	}
 }

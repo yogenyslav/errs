@@ -22,7 +22,7 @@ func Wrap(e error, desc string, meta ...map[string]any) error {
 	src := getSource(wrapCallerSkip)
 	we, isWrapped := errors.AsType[*WrappedErr](e)
 	if isWrapped {
-		we.wrapInChain(nil, src, desc, m)
+		we.wrap(nil, src, desc, m)
 		return we
 	}
 
@@ -31,20 +31,4 @@ func Wrap(e error, desc string, meta ...map[string]any) error {
 		internalErr: fmt.Errorf("%s %w", src, e),
 		msg:         desc,
 	}
-}
-
-// WrapChain continues the error chain if the provided error is already wrapped, otherwise starts a new one.
-func WrapChain(we *WrappedErr, e error, desc string, meta ...map[string]any) *WrappedErr {
-	if we == nil {
-		return Wrap(e, desc, meta...).(*WrappedErr)
-	}
-
-	var m map[string]any
-	if len(meta) > 0 {
-		m = meta[0]
-	}
-
-	src := getSource(wrapCallerSkip)
-	we.wrapInChain(e, src, desc, m)
-	return we
 }
